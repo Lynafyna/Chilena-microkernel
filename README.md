@@ -1,28 +1,28 @@
 # Chilena Kernel
 
-Kernel x86_64 minimalis yang ditulis dalam **Rust** (`no_std`).
+A minimalist x86_64 kernel written in **Rust** (`no_std`).
 
-Terinspirasi dari filosofi desain MOROS, namun ditulis ulang dari awal
-dengan arsitektur dan pendekatan yang berbeda.
+Inspired by the design philosophy of MOROS, but rewritten from scratch
+with a different architecture and approach.
 
 ---
 
-## Arsitektur
+## Architecture
 
 ```
 src/
 ├── main.rs          ← entry point (boot → init → shell)
-├── lib.rs           ← root library, macro global
+├── lib.rs           ← root library, global macros
 ├── sys/             ← KERNEL LAYER
 │   ├── gdt.rs       ← Global Descriptor Table
 │   ├── idt.rs       ← Interrupt Descriptor Table + syscall gate
 │   ├── pic.rs       ← 8259 PIC
 │   ├── mem/         ← Memory management
-│   │   ├── bitmap.rs   ← frame allocator fisik
-│   │   ├── paging.rs   ← page table x86_64
+│   │   ├── bitmap.rs   ← physical frame allocator
+│   │   ├── paging.rs   ← x86_64 page table
 │   │   └── heap.rs     ← kernel heap (linked_list_allocator)
 │   ├── process.rs   ← process table, context switch, ELF loader
-│   ├── syscall/     ← syscall dispatcher + nomor + service
+│   ├── syscall/     ← syscall dispatcher + numbers + services
 │   ├── fs/          ← in-memory VFS
 │   ├── clk/         ← PIT timer + RTC
 │   ├── console.rs   ← stdin buffer + output
@@ -31,48 +31,48 @@ src/
 │   ├── vga/         ← VGA text mode 80×25
 │   ├── cpu.rs       ← CPUID info
 │   └── acpi.rs      ← power management
-├── api/             ← API LAYER (bridge kernel ↔ userspace)
+├── api/             ← API LAYER (kernel ↔ userspace bridge)
 │   ├── process.rs   ← ExitCode, exit()
-│   ├── syscall.rs   ← syscall wrappers ergonomis
-│   ├── console.rs   ← Style (warna ANSI)
+│   ├── syscall.rs   ← ergonomic syscall wrappers
+│   ├── console.rs   ← Style (ANSI colors)
 │   └── io.rs        ← read/write helpers
 └── usr/             ← USERSPACE LAYER
-    ├── shell.rs     ← shell interaktif
-    ├── help.rs      ← perintah help
-    └── info.rs      ← info sistem
+    ├── shell.rs     ← interactive shell
+    ├── help.rs      ← help command
+    └── info.rs      ← system info
 ```
 
 ---
 
-## Syscall
+## Syscalls
 
-Chilena memiliki **16 syscall** yang bersih dan minimalis:
+Chilena has **16** clean and minimalist syscalls:
 
-| No   | Nama    | Fungsi                        |
+| No   | Name    | Function                      |
 |------|---------|-------------------------------|
-| 0x01 | EXIT    | Keluar dari proses            |
-| 0x02 | SPAWN   | Buat proses baru dari ELF     |
-| 0x03 | READ    | Baca dari handle              |
-| 0x04 | WRITE   | Tulis ke handle               |
-| 0x05 | OPEN    | Buka file/device              |
-| 0x06 | CLOSE   | Tutup handle                  |
-| 0x07 | STAT    | Metadata file                 |
-| 0x08 | DUP     | Duplikasi handle              |
-| 0x09 | REMOVE  | Hapus file                    |
-| 0x0A | HALT    | Halt/reboot sistem            |
-| 0x0B | SLEEP   | Tunda N detik                 |
-| 0x0C | POLL    | Cek kesiapan I/O              |
-| 0x0D | ALLOC   | Alokasi memori userspace      |
-| 0x0E | FREE    | Bebaskan memori               |
-| 0x0F | KIND    | Tipe handle                   |
+| 0x01 | EXIT    | Exit a process                |
+| 0x02 | SPAWN   | Create a new process from ELF |
+| 0x03 | READ    | Read from a handle            |
+| 0x04 | WRITE   | Write to a handle             |
+| 0x05 | OPEN    | Open a file/device            |
+| 0x06 | CLOSE   | Close a handle                |
+| 0x07 | STAT    | File metadata                 |
+| 0x08 | DUP     | Duplicate a handle            |
+| 0x09 | REMOVE  | Delete a file                 |
+| 0x0A | HALT    | Halt/reboot the system        |
+| 0x0B | SLEEP   | Sleep for N seconds           |
+| 0x0C | POLL    | Check I/O readiness           |
+| 0x0D | ALLOC   | Allocate userspace memory     |
+| 0x0E | FREE    | Free memory                   |
+| 0x0F | KIND    | Handle type                   |
 
-Dipanggil via `int 0x80` dengan konvensi System V ABI.
+Called via `int 0x80` with System V ABI convention.
 
 ---
 
-## Build & Jalankan
+## Build & Run
 
-### Prasyarat
+### Prerequisites
 
 - Rust nightly
 - `cargo-bootimage`
@@ -86,7 +86,7 @@ rustup component add rust-src llvm-tools-preview
 cargo install bootimage
 ```
 
-### Build dan run
+### Build and run
 
 ```bash
 make run
@@ -94,24 +94,24 @@ make run
 
 ---
 
-## Perintah Shell
+## Shell Commands
 
-| Perintah        | Fungsi                        |
+| Command         | Function                      |
 |-----------------|-------------------------------|
-| `help`          | Tampilkan daftar perintah     |
-| `info`          | Info sistem (RAM, uptime, dll)|
-| `echo [teks]`   | Cetak teks                    |
-| `clear`         | Bersihkan layar               |
-| `cd [path]`     | Ganti direktori               |
-| `ls`            | Daftar file                   |
-| `cat [file]`    | Tampilkan isi file            |
-| `write [f] [t]` | Tulis teks ke file            |
-| `reboot`        | Restart sistem                |
-| `halt`          | Matikan sistem                |
-| `exit`          | Keluar shell                  |
+| `help`          | Show list of commands         |
+| `info`          | System info (RAM, uptime, etc)|
+| `echo [text]`   | Print text                    |
+| `clear`         | Clear the screen              |
+| `cd [path]`     | Change directory              |
+| `ls`            | List files                    |
+| `cat [file]`    | Show file contents            |
+| `write [f] [t]` | Write text to file            |
+| `reboot`        | Restart the system            |
+| `halt`          | Shutdown the system           |
+| `exit`          | Exit the shell                |
 
 ---
 
-## Lisensi
+## License
 
 MIT
