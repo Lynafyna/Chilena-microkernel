@@ -10,6 +10,7 @@ pub mod keyboard;
 pub mod mem;
 pub mod pic;
 pub mod process;
+pub mod sched;
 pub mod serial;
 pub mod syscall;
 pub mod vga;

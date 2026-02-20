@@ -34,6 +34,7 @@ pub fn init() {
 
 fn on_tick() {
     TICK_COUNT.fetch_add(1, Ordering::Relaxed);
+    crate::sys::sched::tick();
 }
 
 /// Uptime kernel dalam detik (floating point)
