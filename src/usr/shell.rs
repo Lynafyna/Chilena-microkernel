@@ -85,6 +85,8 @@ fn exec_line(line: &str) -> Result<(), ExitCode> {
         "halt"   => cmd_halt(),
         "exit"    => return Err(ExitCode::Success),
         "install" => cmd_install(),
+        "send"    => cmd_send(args),
+        "recv"    => cmd_recv(),
         other    => {
             println!("Perintah tidak dikenal: '{}'. Ketik 'help' untuk daftar perintah.", other);
         }
@@ -109,6 +111,8 @@ fn cmd_help() {
     println!("  reboot         — restart sistem");
     println!("  halt           — matikan sistem");
     println!("  install        — setup filesystem awal");
+    println!("  send <pid> <p> — kirim pesan ke proses");
+    println!("  recv           — tunggu dan tampilkan pesan masuk");
     println!("  exit           — keluar dari shell");
 }
 
@@ -172,6 +176,38 @@ fn cmd_write(args: &[&str]) {
         println!("Berhasil ditulis ke '{}'", full_path);
     } else {
         println!("write: gagal menulis ke '{}'", full_path);
+    }
+}
+
+fn cmd_send(args: &[&str]) {
+    if args.len() < 2 {
+        println!("send: perlu <pid> <pesan>");
+        println!("contoh: send 1 hello");
+        return;
+    }
+    let pid: usize = match args[0].parse() {
+        Ok(p) => p,
+        Err(_) => { println!("send: pid harus angka"); return; }
+    };
+    let pesan = args[1..].join(" ");
+    let result = crate::api::syscall::send(pid, 0, pesan.as_bytes());
+    if result == usize::MAX {
+        println!("send: gagal kirim ke PID {}", pid);
+    } else {
+        println!("send: pesan terkirim ke PID {}", pid);
+    }
+}
+
+fn cmd_recv() {
+    println!("recv: menunggu pesan...");
+    let mut msg = crate::sys::ipc::Message::empty();
+    let result = crate::api::syscall::recv(&mut msg);
+    if result == 0 {
+        let data = &msg.data[..msg.data.iter().position(|&b| b == 0).unwrap_or(64)];
+        let text = alloc::string::String::from_utf8_lossy(data);
+        println!("recv: pesan dari PID {} > {}", msg.sender, text);
+    } else {
+        println!("recv: gagal menerima pesan");
     }
 }
 

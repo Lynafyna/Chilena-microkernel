@@ -6,6 +6,7 @@ use x86_64::instructions::port::Port;
 
 static mut PM1A_CNT: u32 = 0;
 static mut SLP_TYPA: u16 = 0;
+#[allow(dead_code)]
 const  SLP_EN:       u16 = 1 << 13;
 
 pub fn init() {

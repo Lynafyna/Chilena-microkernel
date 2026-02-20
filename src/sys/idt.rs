@@ -99,7 +99,52 @@ macro_rules! irq_fn {
     };
 }
 
-irq_fn!(irq0,  0);  irq_fn!(irq1,  1);  irq_fn!(irq2,  2);  irq_fn!(irq3,  3);
+// IRQ 0 (timer) — naked function untuk proper context save/restore
+#[unsafe(naked)]
+extern "x86-interrupt" fn irq0(_: InterruptStackFrame) {
+    naked_asm!(
+        "cld",
+        "push rax",
+        "push rcx",
+        "push rdx",
+        "push rsi",
+        "push rdi",
+        "push r8",
+        "push r9",
+        "push r10",
+        "push r11",
+        "mov rsi, rsp",       // arg2: pointer ke saved registers
+        "mov rdi, rsp",       // arg1: pointer ke interrupt frame
+        "add rdi, 9 * 8",     // frame ada di atas 9 register
+        "call {handler}",
+        "pop r11",
+        "pop r10",
+        "pop r9",
+        "pop r8",
+        "pop rdi",
+        "pop rsi",
+        "pop rdx",
+        "pop rcx",
+        "pop rax",
+        "iretq",
+        handler = sym timer_handler,
+    );
+}
+
+/// Handler timer — dipanggil dari irq0 naked function
+extern "sysv64" fn timer_handler(
+    _frame: &mut InterruptStackFrame,
+    _regs:  &mut CpuRegisters,
+) {
+    IRQ_HANDLERS.lock()[0]();
+    unsafe {
+        sys::pic::PICS
+            .lock()
+            .notify_end_of_interrupt(sys::pic::irq_vector(0));
+    }
+}
+
+irq_fn!(irq1,  1);  irq_fn!(irq2,  2);  irq_fn!(irq3,  3);
 irq_fn!(irq4,  4);  irq_fn!(irq5,  5);  irq_fn!(irq6,  6);  irq_fn!(irq7,  7);
 irq_fn!(irq8,  8);  irq_fn!(irq9,  9);  irq_fn!(irq10, 10); irq_fn!(irq11, 11);
 irq_fn!(irq12, 12); irq_fn!(irq13, 13); irq_fn!(irq14, 14); irq_fn!(irq15, 15);

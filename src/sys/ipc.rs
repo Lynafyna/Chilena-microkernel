@@ -6,7 +6,6 @@
 //!   - Satu mailbox slot per proses (simple, no heap allocation)
 
 use crate::sys::process::{current_pid, PROC_TABLE};
-use core::sync::atomic::Ordering;
 
 // ---------------------------------------------------------------------------
 // Struktur pesan
