@@ -1,0 +1,25 @@
+[package]
+name = "chilena"
+description = "Chilena: A minimal x86_64 kernel written in Rust"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+default-run = "chilena"
+
+[dependencies]
+bit_field           = "0.10.2"
+bootloader          = { version = "0.9.23", features = ["map_physical_memory"] }
+lazy_static         = { version = "1.4.0", features = ["spin_no_std"] }
+linked_list_allocator = "0.10.5"
+object              = { version = "0.32.1", default-features = false, features = ["read"] }
+pc-keyboard         = "0.7.0"
+pic8259             = "0.10.1"
+raw-cpuid           = "10.7.0"
+spin                = "0.9.8"
+uart_16550          = "0.3.0"
+x86_64              = "0.14.12"
+
+[package.metadata.bootloader]
+physical-memory-offset = "0xFFFF800000000000"
+kernel-stack-address   = "0xFFFFFF8000000000"
+boot-info-address      = "0xFFFFFFFF80000000"

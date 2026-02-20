@@ -1,0 +1,54 @@
+//! Serial Port — UART 16550 (COM1 = 0x3F8)
+//!
+//! Digunakan sebagai output log awal dan debugging.
+
+use crate::sys;
+use core::fmt;
+use core::fmt::Write;
+use lazy_static::lazy_static;
+use spin::Mutex;
+use uart_16550::SerialPort;
+use x86_64::instructions::interrupts;
+
+lazy_static! {
+    pub static ref PORT: Mutex<SerialPort> = {
+        let mut port = unsafe { SerialPort::new(0x3F8) };
+        port.init();
+        Mutex::new(port)
+    };
+}
+
+pub fn init() {
+    // Trigger inisialisasi lazy_static
+    let _ = PORT.lock();
+    // IRQ 4 = COM1
+    sys::idt::set_irq_handler(4, on_interrupt);
+}
+
+/// Kirim string ke serial
+pub fn write_str(s: &str) {
+    interrupts::without_interrupts(|| {
+        PORT.lock().write_str(s).ok();
+    });
+}
+
+pub fn print_fmt(args: fmt::Arguments) {
+    interrupts::without_interrupts(|| {
+        PORT.lock().write_fmt(args).ok();
+    });
+}
+
+fn on_interrupt() {
+    let byte = interrupts::without_interrupts(|| {
+        PORT.lock().receive()
+    });
+
+    if byte == 0xFF { return; } // abaikan byte invalid
+
+    let ch = match byte as char {
+        '\r' => '\n',
+        '\x7F' => '\x08', // DEL → BS
+        c => c,
+    };
+    sys::console::input_char(ch);
+}
