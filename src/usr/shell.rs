@@ -85,6 +85,7 @@ fn exec_line(line: &str) -> Result<(), ExitCode> {
         "halt"    => cmd_halt(),
         "exit"    => return Err(ExitCode::Success),
         "install" => cmd_install(),
+        "mkdir"   => cmd_mkdir(args),
         "send"    => cmd_send(args),
         "recv"    => cmd_recv(),
         other     => {
@@ -117,16 +118,28 @@ fn cmd_help() {
 }
 
 fn cmd_clear() {
-    print!("\x1b[2J\x1b[H"); // ANSI: clear screen + cursor to home
+    // Scroll screen down — ANSI not yet supported in VGA driver
+    for _ in 0..25 { println!(); }
 }
 
 fn cmd_echo(args: &[&str]) {
-    println!("{}", args.join(" "));
+    let text = args.join(" ");
+    // Strip surrounding quotes if present
+    let text = text.trim_matches('"');
+    println!("{}", text);
 }
 
 fn cmd_cd(args: &[&str]) {
     let path = args.first().copied().unwrap_or("/");
-    sys::process::set_cwd(path);
+    let full_path = match sys::fs::canonicalize(path) {
+        Ok(p) => p,
+        Err(_) => { println!("cd: invalid path"); return; }
+    };
+    if full_path != "/" && !sys::fs::dir_exists(&full_path) {
+        println!("cd: '{}' not found or not a directory", path);
+        return;
+    }
+    sys::process::set_cwd(&full_path);
 }
 
 fn cmd_ls(args: &[&str]) {
@@ -141,10 +154,11 @@ fn cmd_ls(args: &[&str]) {
     if files.is_empty() {
         println!("(empty)");
     } else {
-        for f in &files {
+        for f in files.iter().filter(|f| !f.name.ends_with("/.dir")) {
             println!("  {:>8} B  {}", f.size, f.name);
         }
-        println!("--- {} file(s)", files.len());
+        let visible = files.iter().filter(|f| !f.name.ends_with("/.dir")).count();
+        println!("--- {} file(s)", visible);
     }
 }
 
@@ -172,22 +186,30 @@ fn cmd_cat(args: &[&str]) {
 }
 
 fn cmd_write(args: &[&str]) {
+    // Usage: write <file> <text>    — overwrite
+    //        write -a <file> <text> — append
     if args.len() < 2 {
-        println!("write: usage: write <file> <text>");
+        println!("write: usage: write [-a] <file> <text>");
         return;
     }
-    let path = args[0];
-    let text = args[1..].join(" ");
+    let (append, path, text) = if args[0] == "-a" {
+        if args.len() < 3 { println!("write: usage: write -a <file> <text>"); return; }
+        (true, args[1], args[2..].join(" "))
+    } else {
+        (false, args[0], args[1..].join(" "))
+    };
     let full_path = match sys::fs::canonicalize(path) {
         Ok(p) => p,
         Err(_) => { println!("write: invalid path"); return; }
     };
     let mut data = text.as_bytes().to_vec();
     data.push(b'\n');
-    if sys::fs::write_file(&full_path, &data).is_ok() {
-        println!("Written to '{}'", full_path);
+    if append {
+        sys::fs::append_file(&full_path, &data).ok();
+        println!("Appended to '{}'", full_path);
     } else {
-        println!("write: failed to write to '{}'", full_path);
+        sys::fs::write_file(&full_path, &data).ok();
+        println!("Written to '{}'", full_path);
     }
 }
 
@@ -221,6 +243,19 @@ fn cmd_recv() {
     } else {
         println!("recv: failed to receive message");
     }
+}
+
+fn cmd_mkdir(args: &[&str]) {
+    let path = match args.first() {
+        Some(p) => p,
+        None => { println!("mkdir: path required"); return; }
+    };
+    let full_path = match sys::fs::canonicalize(path) {
+        Ok(p) => p,
+        Err(_) => { println!("mkdir: invalid path"); return; }
+    };
+    sys::fs::mkdir(&full_path);
+    println!("Directory '{}' created", full_path);
 }
 
 fn cmd_install() {

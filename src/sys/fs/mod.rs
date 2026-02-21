@@ -190,6 +190,25 @@ pub fn write_file(path: &str, data: &[u8]) -> Result<(), ()> {
     Ok(())
 }
 
+/// Append data to an existing file, or create it if it does not exist
+pub fn append_file(path: &str, data: &[u8]) -> Result<(), ()> {
+    let mut vfs = VFS.write();
+    let entry = vfs.entry(path.to_string()).or_insert_with(alloc::vec::Vec::new);
+    entry.extend_from_slice(data);
+    Ok(())
+}
+
+/// Check if path is a registered directory
+pub fn dir_exists(path: &str) -> bool {
+    if path == "/" { return true; }
+    VFS.read().contains_key(&alloc::format!("{}/.dir", path))
+}
+
+/// Create a directory entry in VFS
+pub fn mkdir(path: &str) {
+    VFS.write().insert(alloc::format!("{}/.dir", path), alloc::vec::Vec::new());
+}
+
 pub fn remove(path: &str) -> Result<(), ()> {
     VFS.write().remove(path).map(|_| ()).ok_or(())
 }
