@@ -1,10 +1,10 @@
 //! Scheduler for Chilena — Round-Robin Preemptive (Proper Context Switch)
 //!
-//! How it works:
-//!   - IRQ 0 (timer) calls timer_handler via naked function
-//!   - All registers are saved to the stack then to the Process struct
-//!   - Round-robin selects the next Running process
-//!   - Registers of the target process are restored via iretq
+//! FIXES:
+//!   - TICK hanya di-increment sekali (tidak duplikat antara tick() & schedule())
+//!   - schedule() adalah satu-satunya entry point scheduling
+//!   - Proses baru tanpa saved stack_frame di-iretq langsung ke entry_point
+//!   - switch_to() dihapus — redundant dan bisa race
 
 use crate::sys::process::{
     CURRENT_PID, NEXT_PID, PROC_TABLE,
@@ -16,80 +16,52 @@ use crate::sys::gdt::GDT;
 
 use core::sync::atomic::{AtomicU64, Ordering};
 use x86_64::registers::control::Cr3;
+use x86_64::structures::idt::InterruptStackFrame;
 
 // ---------------------------------------------------------------------------
 // Scheduler interval
 // ---------------------------------------------------------------------------
 
-/// Switch process every 10ms (10 ticks @ 1000Hz)
+/// Switch process every 10ms (10 ticks @ 1000 Hz)
 const SCHED_INTERVAL: u64 = 10;
 
 static TICK: AtomicU64 = AtomicU64::new(0);
 
 // ---------------------------------------------------------------------------
-// tick() — called from clk::on_tick every timer interrupt
+// tick() — dipanggil dari clk::on_tick, HANYA increment counter
+// Scheduling sesungguhnya ada di schedule() karena butuh akses ke stack frame
 // ---------------------------------------------------------------------------
 
 pub fn tick() {
-    let t = TICK.fetch_add(1, Ordering::Relaxed);
-    if t % SCHED_INTERVAL != 0 {
-        return;
-    }
-
-    let n_procs = NEXT_PID.load(Ordering::SeqCst);
-    if n_procs <= 1 {
-        return;
-    }
-
-    let cur = CURRENT_PID.load(Ordering::SeqCst);
-
-    let next = {
-        let table = PROC_TABLE.read();
-        let mut found = None;
-        for i in 1..n_procs {
-            let candidate = (cur + i) % n_procs;
-            if candidate == 0 { continue; }
-            if table[candidate].block == BlockState::Running {
-                found = Some(candidate);
-                break;
-            }
-        }
-        found
-    };
-
-    if let Some(next_pid) = next {
-        if next_pid != cur {
-            switch_to(next_pid);
-        }
-    }
+    TICK.fetch_add(1, Ordering::Relaxed);
 }
 
 // ---------------------------------------------------------------------------
-// Proper context switch — save old process state, restore new process
+// schedule() — dipanggil dari timer_handler di idt.rs
+//              dengan frame & regs yang sudah di-save oleh naked function
 // ---------------------------------------------------------------------------
 
-/// Called from timer_handler with already-saved frame and regs
 pub fn schedule(
-    frame: &mut x86_64::structures::idt::InterruptStackFrame,
+    frame: &mut InterruptStackFrame,
     regs:  &mut CpuRegisters,
 ) {
-    let t = TICK.fetch_add(1, Ordering::Relaxed);
+    let t = TICK.load(Ordering::Relaxed);
     if t % SCHED_INTERVAL != 0 {
         return;
     }
 
     let n_procs = NEXT_PID.load(Ordering::SeqCst);
     if n_procs <= 1 {
-        return;
+        return; // hanya ada kernel, tidak perlu switch
     }
 
     let cur = CURRENT_PID.load(Ordering::SeqCst);
 
-    // Save current process state
+    // Simpan state proses yang sedang jalan
     save_stack_frame(**frame);
     save_registers(*regs);
 
-    // Find next ready process
+    // Cari proses berikutnya yang ready (skip PID 0 = kernel idle)
     let next = {
         let table = PROC_TABLE.read();
         let mut found = None;
@@ -104,73 +76,55 @@ pub fn schedule(
         found
     };
 
-    if let Some(next_pid) = next {
-        if next_pid == cur { return; }
+    let next_pid = match next {
+        Some(p) if p != cur => p,
+        _ => return, // tidak ada yang bisa jalan
+    };
 
-        // Load target process state
-        let (next_frame, next_regs, pt_frame) = {
-            let table = PROC_TABLE.read();
-            let p = &table[next_pid];
-            (p.stack_frame, p.saved_regs, p.pt_frame)
-        };
-
-        CURRENT_PID.store(next_pid, Ordering::SeqCst);
-
-        // Restore target process registers
-        *regs = next_regs;
-
-        // Restore stack frame (RIP, RSP, RFLAGS, CS, SS)
-        if let Some(sf) = next_frame {
-            unsafe { frame.as_mut().write(sf); }
-        }
-
-        // Switch page table
-        unsafe {
-            let (_, flags) = Cr3::read();
-            Cr3::write(pt_frame, flags);
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Fallback switch_to — used when no saved frame exists yet
-// ---------------------------------------------------------------------------
-
-fn switch_to(next_pid: usize) {
-    let (entry, stack, pt_frame, saved_regs) = {
+    // Ambil state proses berikutnya
+    let (maybe_frame, next_regs, pt_frame, entry, stack) = {
         let table = PROC_TABLE.read();
         let p = &table[next_pid];
         (
+            p.stack_frame,
+            p.saved_regs,
+            p.pt_frame,
             p.code_base + p.entry_point,
             p.stack_base,
-            p.pt_frame,
-            p.saved_regs,
         )
     };
 
     CURRENT_PID.store(next_pid, Ordering::SeqCst);
 
+    // Restore register proses berikutnya
+    *regs = next_regs;
+
+    // Switch page table
     unsafe {
         let (_, flags) = Cr3::read();
         Cr3::write(pt_frame, flags);
+    }
 
-        core::arch::asm!(
-            "cli",
-            "push {ss:r}",
-            "push {rsp:r}",
-            "push 0x200",
-            "push {cs:r}",
-            "push {rip:r}",
-            "iretq",
-            ss  = in(reg) GDT.1.u_data.0,
-            rsp = in(reg) stack,
-            cs  = in(reg) GDT.1.u_code.0,
-            rip = in(reg) entry,
-            in("rax") saved_regs.rax,
-            in("rdi") saved_regs.rdi,
-            in("rsi") saved_regs.rsi,
-            in("rdx") saved_regs.rdx,
-            options(noreturn)
-        );
+    if let Some(sf) = maybe_frame {
+        // Proses sudah pernah jalan sebelumnya — restore saved frame-nya
+        unsafe { frame.as_mut().write(sf); }
+    } else {
+        // Proses baru, belum pernah dijadwal — iretq ke entry point
+        unsafe {
+            core::arch::asm!(
+                "cli",
+                "push {ss:r}",
+                "push {rsp:r}",
+                "push 0x200",     // RFLAGS: IF=1
+                "push {cs:r}",
+                "push {rip:r}",
+                "iretq",
+                ss  = in(reg) GDT.1.u_data.0,
+                rsp = in(reg) stack,
+                cs  = in(reg) GDT.1.u_code.0,
+                rip = in(reg) entry,
+                options(noreturn)
+            );
+        }
     }
 }

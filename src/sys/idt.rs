@@ -99,11 +99,20 @@ macro_rules! irq_fn {
     };
 }
 
-// IRQ 0 (timer) — naked function for proper context save/restore
+// IRQ 0 (timer) — naked function untuk proper context save/restore
+// FIX: sekarang save semua register termasuk callee-saved (rbx, rbp, r12-r15)
 #[unsafe(naked)]
 extern "x86-interrupt" fn irq0(_: InterruptStackFrame) {
     naked_asm!(
         "cld",
+        // Push callee-saved (sesuai urutan CpuRegisters: r15..rbx)
+        "push rbx",
+        "push rbp",
+        "push r12",
+        "push r13",
+        "push r14",
+        "push r15",
+        // Push scratch registers
         "push rax",
         "push rcx",
         "push rdx",
@@ -113,9 +122,9 @@ extern "x86-interrupt" fn irq0(_: InterruptStackFrame) {
         "push r9",
         "push r10",
         "push r11",
-        "mov rsi, rsp",       // arg2: pointer to saved registers
+        "mov rsi, rsp",       // arg2: pointer to saved registers (CpuRegisters)
         "mov rdi, rsp",       // arg1: pointer to interrupt frame
-        "add rdi, 9 * 8",     // frame is above the 9 saved registers
+        "add rdi, 15 * 8",    // frame is above the 15 saved registers
         "call {handler}",
         "pop r11",
         "pop r10",
@@ -126,22 +135,35 @@ extern "x86-interrupt" fn irq0(_: InterruptStackFrame) {
         "pop rdx",
         "pop rcx",
         "pop rax",
+        "pop r15",
+        "pop r14",
+        "pop r13",
+        "pop r12",
+        "pop rbp",
+        "pop rbx",
         "iretq",
         handler = sym timer_handler,
     );
 }
 
 /// Timer handler — called from irq0 naked function
+/// FIX: sekarang forward frame+regs ke scheduler untuk proper context switch
 extern "sysv64" fn timer_handler(
-    _frame: &mut InterruptStackFrame,
-    _regs:  &mut CpuRegisters,
+    frame: &mut InterruptStackFrame,
+    regs:  &mut CpuRegisters,
 ) {
+    // Tick clock dulu (increment counter)
     IRQ_HANDLERS.lock()[0]();
+
+    // EOI dulu sebelum schedule agar PIC tidak blocked
     unsafe {
         sys::pic::PICS
             .lock()
             .notify_end_of_interrupt(sys::pic::irq_vector(0));
     }
+
+    // Sekarang baru schedule — bisa modifikasi frame+regs untuk context switch
+    sys::sched::schedule(frame, regs);
 }
 
 irq_fn!(irq1,  1);  irq_fn!(irq2,  2);  irq_fn!(irq3,  3);
@@ -202,10 +224,19 @@ extern "x86-interrupt" fn on_page_fault(
 // ---------------------------------------------------------------------------
 
 /// Syscall entry point: save registers, call dispatcher, restore
+/// FIX: sekarang juga save/restore callee-saved registers
 #[unsafe(naked)]
 extern "sysv64" fn syscall_entry() -> ! {
     naked_asm!(
         "cld",
+        // Push callee-saved
+        "push rbx",
+        "push rbp",
+        "push r12",
+        "push r13",
+        "push r14",
+        "push r15",
+        // Push scratch
         "push rax",
         "push rcx",
         "push rdx",
@@ -215,10 +246,10 @@ extern "sysv64" fn syscall_entry() -> ! {
         "push r9",
         "push r10",
         "push r11",
-        "mov rsi, rsp",        // arg2: pointer to saved registers
+        "mov rsi, rsp",        // arg2: pointer to CpuRegisters
         "mov rdi, rsp",        // arg1: pointer to interrupt frame
-        "add rdi, 9 * 8",      // interrupt frame is above 9 registers
-        "sti",                 // allow interrupts during syscall execution
+        "add rdi, 15 * 8",     // interrupt frame is above 15 registers
+        "sti",                 // allow interrupts during syscall
         "call {handler}",
         "cli",
         "pop r11",
@@ -230,6 +261,12 @@ extern "sysv64" fn syscall_entry() -> ! {
         "pop rdx",
         "pop rcx",
         "pop rax",
+        "pop r15",
+        "pop r14",
+        "pop r13",
+        "pop r12",
+        "pop rbp",
+        "pop rbx",
         "iretq",
         handler = sym syscall_handler,
     );

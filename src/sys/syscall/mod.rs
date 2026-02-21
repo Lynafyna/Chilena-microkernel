@@ -19,6 +19,22 @@ fn raw_str(ptr: *mut u8, len: usize) -> &'static str {
     }
 }
 
+/// Validasi bahwa range ptr..ptr+len sepenuhnya ada di userspace address space
+/// FIX: cegah userspace baca/tulis memori kernel lewat syscall
+fn validate_user_ptr(ptr: usize, len: usize) -> bool {
+    if len == 0 { return true; }
+    let start = ptr as u64;
+    let end   = match start.checked_add(len as u64) {
+        Some(e) => e,
+        None    => return false, // overflow
+    };
+    // Pastikan seluruh range ada di userspace window
+    let user_start = 0x0080_0000u64;
+    let user_end   = user_start + ((sys::process::MAX_PROCS as u64 - 1)
+                     * sys::process::MAX_PROC_MEM as u64);
+    start >= user_start && end <= user_end
+}
+
 /// Receive syscall from IDT handler and forward to service layer
 pub fn dispatch(n: usize, a1: usize, a2: usize, a3: usize, a4: usize) -> usize {
     match n {
@@ -32,6 +48,11 @@ pub fn dispatch(n: usize, a1: usize, a2: usize, a3: usize, a4: usize) -> usize {
         }
 
         number::SPAWN => {
+            // a1=path_ptr, a2=path_len, a3=args_ptr, a4=args_len
+            if !validate_user_ptr(a1, a2) {
+                kdebug!("SPAWN: invalid path ptr {:#X} len {}", a1, a2);
+                return usize::MAX;
+            }
             let ptr  = sys::process::resolve_addr(a1 as u64);
             let len  = a2;
             let path = raw_str(ptr, len);
@@ -45,6 +66,10 @@ pub fn dispatch(n: usize, a1: usize, a2: usize, a3: usize, a4: usize) -> usize {
         }
 
         number::OPEN => {
+            if !validate_user_ptr(a1, a2) {
+                kdebug!("OPEN: invalid path ptr {:#X} len {}", a1, a2);
+                return usize::MAX;
+            }
             let ptr   = sys::process::resolve_addr(a1 as u64);
             let len   = a2;
             let flags = a3 as u8;
@@ -59,6 +84,11 @@ pub fn dispatch(n: usize, a1: usize, a2: usize, a3: usize, a4: usize) -> usize {
 
         number::READ => {
             let handle = a1;
+            // a2=buf_ptr, a3=buf_len
+            if !validate_user_ptr(a2, a3) {
+                kdebug!("READ: invalid buf ptr {:#X} len {}", a2, a3);
+                return usize::MAX;
+            }
             let ptr = sys::process::resolve_addr(a2 as u64);
             let len = a3;
             let buf = unsafe { core::slice::from_raw_parts_mut(ptr, len) };
@@ -67,6 +97,11 @@ pub fn dispatch(n: usize, a1: usize, a2: usize, a3: usize, a4: usize) -> usize {
 
         number::WRITE => {
             let handle = a1;
+            // a2=buf_ptr, a3=buf_len
+            if !validate_user_ptr(a2, a3) {
+                kdebug!("WRITE: invalid buf ptr {:#X} len {}", a2, a3);
+                return usize::MAX;
+            }
             let ptr = sys::process::resolve_addr(a2 as u64);
             let len = a3;
             let buf = unsafe { core::slice::from_raw_parts(ptr, len) };
@@ -78,6 +113,10 @@ pub fn dispatch(n: usize, a1: usize, a2: usize, a3: usize, a4: usize) -> usize {
         }
 
         number::STAT => {
+            if !validate_user_ptr(a1, a2) {
+                kdebug!("STAT: invalid path ptr");
+                return usize::MAX;
+            }
             let ptr  = sys::process::resolve_addr(a1 as u64);
             let len  = a2;
             let path = raw_str(ptr, len);
@@ -86,6 +125,10 @@ pub fn dispatch(n: usize, a1: usize, a2: usize, a3: usize, a4: usize) -> usize {
         }
 
         number::REMOVE => {
+            if !validate_user_ptr(a1, a2) {
+                kdebug!("REMOVE: invalid path ptr");
+                return usize::MAX;
+            }
             let ptr  = sys::process::resolve_addr(a1 as u64);
             let len  = a2;
             let path = raw_str(ptr, len);
@@ -97,7 +140,11 @@ pub fn dispatch(n: usize, a1: usize, a2: usize, a3: usize, a4: usize) -> usize {
         }
 
         number::SEND => {
-            // a1 = target_pid, a2 = kind, a3 = data_ptr, a4 = data_len
+            // a1=target_pid, a2=kind, a3=data_ptr, a4=data_len
+            if !validate_user_ptr(a3, a4) {
+                kdebug!("SEND: invalid data ptr {:#X} len {}", a3, a4);
+                return usize::MAX;
+            }
             let target  = a1;
             let kind    = a2 as u32;
             let ptr     = sys::process::resolve_addr(a3 as u64);
@@ -107,7 +154,12 @@ pub fn dispatch(n: usize, a1: usize, a2: usize, a3: usize, a4: usize) -> usize {
         }
 
         number::RECV => {
-            // a1 = pointer to Message struct in userspace
+            // a1=pointer to Message struct
+            let msg_size = core::mem::size_of::<sys::ipc::Message>();
+            if !validate_user_ptr(a1, msg_size) {
+                kdebug!("RECV: invalid msg ptr {:#X}", a1);
+                return usize::MAX;
+            }
             let out = unsafe { &mut *(sys::process::resolve_addr(a1 as u64) as *mut sys::ipc::Message) };
             sys::ipc::recv(out)
         }

@@ -48,6 +48,7 @@ const USER_BASE: u64 = 0x0080_0000;
 // Global state
 // ---------------------------------------------------------------------------
 
+/// Monotonic counter — hanya dipakai sebagai fallback
 static PROC_CODE_BASE: AtomicU64    = AtomicU64::new(0);
 pub static CURRENT_PID: AtomicUsize = AtomicUsize::new(0);
 pub static NEXT_PID:    AtomicUsize = AtomicUsize::new(1);
@@ -62,13 +63,55 @@ pub fn set_proc_code_base(addr: u64) {
     PROC_CODE_BASE.store(addr, Ordering::SeqCst);
 }
 
+/// Cari slot kosong di process table (PID > 0)
+/// FIX: slot reuse — slot yang id==0 dan bukan PID 0 berarti free
+fn find_free_slot() -> Option<usize> {
+    let table = PROC_TABLE.read();
+    for i in 1..MAX_PROCS {
+        if table[i].id == 0 {
+            return Some(i);
+        }
+    }
+    None
+}
+
+/// Cari virtual address range yang belum dipakai proses manapun
+/// FIX: virtual address reuse — daripada terus nambah PROC_CODE_BASE
+fn find_free_code_base() -> Option<u64> {
+    let slot_size = MAX_PROC_MEM as u64;
+    let max_slots = (MAX_PROCS - 1) as u64;
+    let table = PROC_TABLE.read();
+
+    'outer: for slot in 0..max_slots {
+        let candidate = USER_BASE + slot * slot_size;
+        for i in 1..MAX_PROCS {
+            if table[i].id != 0 && table[i].code_base == candidate {
+                continue 'outer;
+            }
+        }
+        return Some(candidate);
+    }
+    None
+}
+
 // ---------------------------------------------------------------------------
-// Register state (System V ABI scratch registers)
+// Register state
+// FIX: tambahkan callee-saved registers (rbx, rbp, r12-r15)
+// Sebelumnya hanya ada scratch registers — ini bisa corrupt state proses
+// yang memakai register callee-saved (hampir semua program non-trivial)
 // ---------------------------------------------------------------------------
 
 #[repr(align(8), C)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct CpuRegisters {
+    // Callee-saved (System V ABI) — harus disimpan saat context switch
+    pub r15: usize,
+    pub r14: usize,
+    pub r13: usize,
+    pub r12: usize,
+    pub rbp: usize,
+    pub rbx: usize,
+    // Caller-saved (scratch) — sudah ada sebelumnya
     pub r11: usize,
     pub r10: usize,
     pub r9:  usize,
@@ -239,22 +282,41 @@ pub unsafe fn page_table() -> &'static mut PageTable {
 // ---------------------------------------------------------------------------
 
 pub fn terminate() {
-    let table = PROC_TABLE.read();
-    let proc  = &table[current_pid()];
-    let parent_id = proc.parent_id;
+    let pid = current_pid();
+    let (parent_id, pt_frame) = {
+        let table = PROC_TABLE.read();
+        let proc = &table[pid];
+        (proc.parent_id, proc.pt_frame)
+    };
 
-    if NEXT_PID.load(Ordering::SeqCst) > 0 {
+    // Release pages sebelum clear slot
+    {
+        let table = PROC_TABLE.read();
+        table[pid].release_pages();
+    }
+
+    // Clear slot — set id=0 menandakan slot kosong dan siap di-reuse
+    {
+        let mut table = PROC_TABLE.write();
+        table[pid] = Box::new(Process::new()); // reset ke default (id=0)
+    }
+
+    // Update jumlah proses aktif
+    if NEXT_PID.load(Ordering::SeqCst) > 1 {
         NEXT_PID.fetch_sub(1, Ordering::SeqCst);
     }
+
     set_pid(parent_id);
 
-    proc.release_pages();
+    // Deallocate page table frame
     unsafe {
         let (_, flags) = Cr3::read();
-        Cr3::write(current_page_table_frame(), flags);
         with_frame_allocator(|fa| {
-            fa.deallocate_frame(proc.pt_frame);
+            fa.deallocate_frame(pt_frame);
         });
+        // Switch ke page table parent
+        let parent_pt = PROC_TABLE.read()[parent_id].pt_frame;
+        Cr3::write(parent_pt, flags);
     }
 }
 
@@ -313,9 +375,11 @@ impl Process {
     }
 
     fn create(bin: &[u8]) -> Result<usize, ()> {
-        if NEXT_PID.load(Ordering::SeqCst) >= MAX_PROCS {
-            return Err(());
-        }
+        // FIX: cari slot kosong, bukan check NEXT_PID >= MAX_PROCS
+        let slot = find_free_slot().ok_or(())?;
+
+        // FIX: cari virtual address range yang bisa di-reuse
+        let code_base = find_free_code_base().ok_or(())?;
 
         // Allocate frame for new process page table
         let pt_frame = with_frame_allocator(|fa| {
@@ -334,7 +398,6 @@ impl Process {
             OffsetPageTable::new(new_pt, VirtAddr::new(phys_mem_offset()))
         };
 
-        let code_base  = PROC_CODE_BASE.fetch_add(MAX_PROC_MEM as u64, Ordering::SeqCst);
         let stack_base = code_base + MAX_PROC_MEM as u64 - 4096;
         let mut entry_point = 0u64;
 
@@ -357,25 +420,25 @@ impl Process {
         }
 
         let parent = PROC_TABLE.read()[current_pid()].clone();
-        let id     = NEXT_PID.fetch_add(1, Ordering::SeqCst);
 
         let proc = Process {
-            id,
+            id:          slot, // gunakan slot index sebagai PID
             parent_id:   parent.id,
             code_base,
             stack_base,
             entry_point,
             pt_frame,
             data:        parent.data.clone(),
-            stack_frame: parent.stack_frame,
-            saved_regs:  parent.saved_regs,
+            stack_frame: None, // proses baru — belum punya saved frame
+            saved_regs:  CpuRegisters::default(),
             allocator:   Arc::new(LockedHeap::empty()),
             mailbox:     None,
             block:       BlockState::Running,
         };
 
-        PROC_TABLE.write()[id] = Box::new(proc);
-        Ok(id)
+        PROC_TABLE.write()[slot] = Box::new(proc);
+        NEXT_PID.fetch_add(1, Ordering::SeqCst);
+        Ok(slot)
     }
 
     fn exec(&self, args_ptr: usize, args_len: usize) {

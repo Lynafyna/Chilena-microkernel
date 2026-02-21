@@ -61,7 +61,7 @@ pub fn send(target_pid: usize, kind: u32, data: &[u8]) -> usize {
     // Validate target
     {
         let table = PROC_TABLE.read();
-        if target_pid >= table.len() || table[target_pid].id == 0 && target_pid != 0 {
+        if target_pid >= table.len() || (table[target_pid].id == 0 && target_pid != 0) {
             return usize::MAX;
         }
     }
@@ -72,28 +72,33 @@ pub fn send(target_pid: usize, kind: u32, data: &[u8]) -> usize {
 
     let msg = Message { sender: sender_pid, kind, data: payload };
 
-    // Spin until target mailbox is empty, then deposit message
+    // FIX: Spin + yield dengan enable_and_hlt agar scheduler bisa jalan
+    // Ini memungkinkan proses penerima mendapat giliran di single-core
     let mut retries = 0usize;
     loop {
-        let mut table = PROC_TABLE.write();
+        {
+            let mut table = PROC_TABLE.write();
 
-        if table[target_pid].mailbox.is_none() {
-            table[target_pid].mailbox   = Some(msg);
-            table[target_pid].block     = BlockState::Running;
-            table[sender_pid].block     = BlockState::Running;
-            return 0;
+            if table[target_pid].mailbox.is_none() {
+                table[target_pid].mailbox = Some(msg);
+                table[target_pid].block   = BlockState::Running;
+                table[sender_pid].block   = BlockState::Running;
+                return 0;
+            }
+
+            table[sender_pid].block = BlockState::WaitingSend { target: target_pid };
         }
 
-        // Timeout after 1000 retries — avoid freeze on single core
         retries += 1;
         if retries > 1000 {
-            table[sender_pid].block = BlockState::Running;
+            // Timeout — jangan freeze selamanya
+            PROC_TABLE.write()[sender_pid].block = BlockState::Running;
             return usize::MAX;
         }
 
-        table[sender_pid].block = BlockState::WaitingSend { target: target_pid };
-        drop(table);
-        x86_64::instructions::hlt();
+        // FIX: enable interrupts LALU hlt — ini memungkinkan timer IRQ (dan
+        // scheduler) untuk jalan, sehingga proses penerima bisa consume mailbox
+        x86_64::instructions::interrupts::enable_and_hlt();
     }
 }
 
@@ -114,9 +119,10 @@ pub fn recv(out: &mut Message) -> usize {
                 *out = msg;
                 return 0;
             }
-            // Mailbox empty — mark as waiting
             table[pid].block = BlockState::WaitingRecv;
         }
-        x86_64::instructions::hlt();
+
+        // FIX: sama seperti send — enable interrupt agar scheduler bisa jalan
+        x86_64::instructions::interrupts::enable_and_hlt();
     }
 }
