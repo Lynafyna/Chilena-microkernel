@@ -1,4 +1,4 @@
-//! info — display Chilena system information
+//! info — display system information
 
 use crate::sys;
 

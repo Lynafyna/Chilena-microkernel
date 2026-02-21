@@ -13,22 +13,21 @@ entry_point!(kernel_main);
 fn kernel_main(boot_info: &'static BootInfo) -> ! {
     chilena::init(boot_info);
     print!("\x1b[?25h");
-    loop {
-        boot_sequence();
-    }
+    boot_sequence();
+    loop { x86_64::instructions::hlt(); }
 }
 
 fn boot_sequence() {
     let boot_script = "/ini/boot.sh";
     if sys::fs::exists(boot_script) {
-        usr::shell::run_script(boot_script).ok();
+        usr::cl::shell::run_script(boot_script).ok();
     } else {
         if sys::fs::is_mounted() {
             kerror!("Boot file '{}' not found", boot_script);
         } else {
             kwarn!("Filesystem not mounted. Run 'install' to set up.");
         }
-        usr::shell::run_interactive().ok();
+        usr::cl::shell::run_interactive().ok();
     }
 }
 
