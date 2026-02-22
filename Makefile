@@ -2,7 +2,8 @@
 
 TARGET  := x86_64-chilena
 KERNEL  := target/$(TARGET)/release/chilena
-IMAGE   := chilena.img
+DISK    := disk.img
+DISK_MB := 64
 
 # Build kernel
 build:
@@ -16,18 +17,39 @@ image: build
 		-Z build-std=core,alloc \
 		-Z build-std-features=compiler-builtins-mem
 
-# Jalankan di QEMU
+# Buat disk image kosong untuk VirtIO (64 MB) — hanya kalau belum ada
+disk:
+	@if [ ! -f $(DISK) ]; then \
+		dd if=/dev/zero of=$(DISK) bs=1M count=$(DISK_MB) status=progress; \
+		echo "Disk image created: $(DISK) ($(DISK_MB) MB)"; \
+	else \
+		echo "Disk image already exists: $(DISK)"; \
+	fi
+
+# Jalankan di QEMU tanpa VirtIO disk
 run: image
 	qemu-system-x86_64 \
 		-drive format=raw,file=target/$(TARGET)/release/bootimage-chilena.bin \
-		-serial stdio \
+		-serial mon:stdio \
 		-m 256M \
-		--no-reboot
+		--no-reboot \
+		-nographic
 
-# Jalankan dengan monitor QEMU
+# Jalankan di QEMU dengan VirtIO disk
+run-disk: image disk
+	qemu-system-x86_64 \
+		-drive format=raw,file=target/$(TARGET)/release/bootimage-chilena.bin \
+		-drive file=$(DISK),if=virtio,format=raw \
+		-serial mon:stdio \
+		-m 256M \
+		--no-reboot \
+		-nographic
+
+# Debug dengan monitor QEMU + VirtIO disk
 debug: image
 	qemu-system-x86_64 \
 		-drive format=raw,file=target/$(TARGET)/release/bootimage-chilena.bin \
+		-drive file=$(DISK),if=virtio,format=raw \
 		-serial stdio \
 		-monitor telnet:localhost:1234,server,nowait \
 		-m 256M \
@@ -36,5 +58,6 @@ debug: image
 # Bersihkan hasil build
 clean:
 	cargo clean
+	rm -f $(DISK)
 
-.PHONY: build image run debug clean
+.PHONY: build image disk run run-disk debug clean

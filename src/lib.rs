@@ -59,6 +59,8 @@ pub fn init(boot_info: &'static BootInfo) {
     klog!("SYS Chilena v{}", VERSION);
     sys::cpu::init();
     sys::acpi::init();
+    // Inisialisasi VirtIO block device (opsional — hanya kalau QEMU punya -drive if=virtio)
+    sys::virtio::init();
     klog!("RTC {}", sys::clk::date_string());
 }
 
