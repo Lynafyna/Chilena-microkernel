@@ -13,6 +13,9 @@ pub fn run() {
     println!("  install        — setup initial filesystem");
     println!("  send <pid> <m> — send IPC message");
     println!("  recv           — receive IPC message");
+    println!("  disk-ping      — cek status VirtIO disk");
+    println!("  disk-read <n>  — baca sektor N dari disk");
+    println!("  disk-write <n> <text> — tulis text ke sektor N");
     println!("  reboot         — restart the system");
     println!("  exit           — exit the shell");
 }

@@ -6,7 +6,7 @@ extern crate alloc;
 use bootloader::{entry_point, BootInfo};
 use core::panic::PanicInfo;
 use chilena::{sys, usr, hlt_loop};
-use chilena::{kerror, kwarn, print};
+use chilena::{kerror, kwarn, klog, print};
 
 entry_point!(kernel_main);
 
@@ -18,6 +18,13 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
 }
 
 fn boot_sequence() {
+    // Jika VirtIO tersedia, DiskServer siap diakses
+    // TODO: Setelah ELF userspace loader siap, DiskServer akan spawn sebagai
+    // proses terpisah yang benar-benar berkomunikasi via IPC cross-process
+    if sys::virtio::is_available() {
+        klog!("Disk: VirtIO ready — gunakan disk-read/disk-write/disk-ping");
+    }
+
     let boot_script = "/ini/boot.sh";
     if sys::fs::exists(boot_script) {
         usr::cl::shell::run_script(boot_script).ok();

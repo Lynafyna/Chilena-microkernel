@@ -77,10 +77,15 @@ fn exec_line(line: &str) -> Result<(), ExitCode> {
         "info"    => cl::basic::info::run(),
 
         // fs
-        "ls"      => cl::fs::ls::run(args),
-        "cat"     => cl::fs::cat::run(args),
-        "write"   => cl::fs::write::run(args),
-        "mkdir"   => cl::fs::mkdir::run(args),
+        "ls"          => cl::fs::ls::run(args),
+        "cat"         => cl::fs::cat::run(args),
+        "write"       => cl::fs::write::run(args),
+        "mkdir"       => cl::fs::mkdir::run(args),
+
+        // disk (via IPC ke DiskServer)
+        "disk-ping"   => cl::disk::ping::run(),
+        "disk-read"   => cl::disk::read::run(args),
+        "disk-write"  => cl::disk::write::run(args),
 
         // ipc
         "send"    => cl::ipc::send::run(args),
