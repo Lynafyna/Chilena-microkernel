@@ -18,24 +18,17 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
 }
 
 fn boot_sequence() {
-    // Jika VirtIO tersedia, DiskServer siap diakses
-    // TODO: Setelah ELF userspace loader siap, DiskServer akan spawn sebagai
-    // proses terpisah yang benar-benar berkomunikasi via IPC cross-process
     if sys::virtio::is_available() {
-        klog!("Disk: VirtIO ready — gunakan disk-read/disk-write/disk-ping");
+        klog!("Disk: VirtIO ready");
     }
 
     let boot_script = "/ini/boot.sh";
     if sys::fs::exists(boot_script) {
         usr::cl::shell::run_script(boot_script).ok();
-    } else {
-        if sys::fs::is_mounted() {
-            kerror!("Boot file '{}' not found", boot_script);
-        } else {
-            kwarn!("Filesystem not mounted. Run 'install' to set up.");
-        }
-        usr::cl::shell::run_interactive().ok();
     }
+
+    // Selalu jalankan interactive shell setelah boot script (atau kalau tidak ada)
+    usr::cl::shell::run_interactive().ok();
 }
 
 #[panic_handler]

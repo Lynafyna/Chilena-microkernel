@@ -1,9 +1,12 @@
 //! Filesystem for Chilena
 //!
-//! Minimal implementation: simple in-memory filesystem.
-//! Sufficient for boot scripts, shell, and basic userspace.
+//! Dua backend:
+//!   1. ChilenaFS (chfs) — disk-based, persistent via VirtIO
+//!   2. MemFS — RAM-based fallback kalau VirtIO tidak ada
 //!
-//! A full disk-based filesystem can be developed later.
+//! API publik otomatis pilih backend yang tersedia.
+
+pub mod chfs;
 
 use alloc::collections::BTreeMap;
 use alloc::string::{String, ToString};
@@ -240,12 +243,37 @@ pub fn list_files(dir: &str) -> alloc::vec::Vec<FileInfo> {
         .collect()
 }
 
-/// Called during sys::mem::init
+/// Called during boot — mount ChilenaFS kalau VirtIO ada, fallback ke MemFS
 pub fn init() {
-    mount_memfs();
+    // Coba mount ChilenaFS dari disk dulu
+    if chfs::mount() {
+        klog!("FS: ChilenaFS mounted from disk");
+        // Sync file penting dari ChilenaFS ke MemFS agar shell bisa akses
+        sync_chfs_to_memfs();
+    } else {
+        // Fallback ke MemFS
+        mount_memfs();
+    }
 
-    // Write default boot script if it doesn't exist
+    // Boot script default — hanya untuk custom commands saat boot
+    // TIDAK perlu 'shell' karena main.rs selalu spawn interactive shell
     if !exists("/ini/boot.sh") {
-        write_file("/ini/boot.sh", b"shell\n").ok();
+        write_file("/ini/boot.sh", b"# Chilena boot script\necho Selamat datang di Chilena!\n").ok();
+    }
+}
+
+/// Sync semua file dari ChilenaFS ke MemFS (agar API lama tetap bekerja)
+fn sync_chfs_to_memfs() {
+    MOUNTED.call_once(|| ());
+    let files = chfs::list_all();
+    for f in files {
+        if !f.is_dir {
+            if let Ok(data) = chfs::read_file(&f.name) {
+                VFS.write().insert(
+                    alloc::format!("/{}", f.name),
+                    data,
+                );
+            }
+        }
     }
 }

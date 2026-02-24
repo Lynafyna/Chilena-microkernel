@@ -61,6 +61,8 @@ pub fn init(boot_info: &'static BootInfo) {
     sys::acpi::init();
     // Inisialisasi VirtIO block device (opsional — hanya kalau QEMU punya -drive if=virtio)
     sys::virtio::init();
+    // Inisialisasi filesystem — mount ChilenaFS kalau VirtIO ada, fallback ke MemFS
+    sys::fs::init();
     klog!("RTC {}", sys::clk::date_string());
 }
 

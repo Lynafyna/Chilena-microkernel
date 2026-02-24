@@ -82,7 +82,14 @@ fn exec_line(line: &str) -> Result<(), ExitCode> {
         "write"       => cl::fs::write::run(args),
         "mkdir"       => cl::fs::mkdir::run(args),
 
-        // disk (via IPC ke DiskServer)
+        // ChilenaFS — disk-based persistent filesystem
+        "chfs-format" => cl::chfs::format::run(),
+        "chfs-ls"     => cl::chfs::ls::run(),
+        "chfs-write"  => cl::chfs::write::run(args),
+        "chfs-cat"    => cl::chfs::cat::run(args),
+        "chfs-rm"     => cl::chfs::rm::run(args),
+
+        // disk (raw VirtIO sector access)
         "disk-ping"   => cl::disk::ping::run(),
         "disk-read"   => cl::disk::read::run(args),
         "disk-write"  => cl::disk::write::run(args),
