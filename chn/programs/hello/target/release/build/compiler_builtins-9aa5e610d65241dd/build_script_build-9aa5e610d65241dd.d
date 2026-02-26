@@ -1,6 +1,0 @@
-/workspaces/Chilena-microkernel/chn/programs/hello/target/release/build/compiler_builtins-9aa5e610d65241dd/build_script_build-9aa5e610d65241dd.d: /home/codespace/.rustup/toolchains/nightly-2025-09-01-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/compiler-builtins/compiler-builtins/build.rs /home/codespace/.rustup/toolchains/nightly-2025-09-01-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/compiler-builtins/compiler-builtins/configure.rs
-
-/workspaces/Chilena-microkernel/chn/programs/hello/target/release/build/compiler_builtins-9aa5e610d65241dd/build_script_build-9aa5e610d65241dd: /home/codespace/.rustup/toolchains/nightly-2025-09-01-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/compiler-builtins/compiler-builtins/build.rs /home/codespace/.rustup/toolchains/nightly-2025-09-01-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/compiler-builtins/compiler-builtins/configure.rs
-
-/home/codespace/.rustup/toolchains/nightly-2025-09-01-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/compiler-builtins/compiler-builtins/build.rs:
-/home/codespace/.rustup/toolchains/nightly-2025-09-01-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/compiler-builtins/compiler-builtins/configure.rs:
