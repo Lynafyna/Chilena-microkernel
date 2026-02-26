@@ -193,7 +193,15 @@ extern "x86-interrupt" fn on_double_fault(frame: InterruptStackFrame, code: u64)
 }
 
 extern "x86-interrupt" fn on_general_protection_fault(frame: InterruptStackFrame, code: u64) {
-    panic!("GENERAL PROTECTION FAULT (code={}) at\n{:#?}", code, frame);
+    // code=0 berarti tidak ada segment selector spesifik
+    // code!=0 berarti bit 0-15 adalah segment selector yang bermasalah
+    kerror!("GENERAL PROTECTION FAULT");
+    kerror!("  error code : {:#X} (selector={:#X})", code, code >> 3);
+    kerror!("  RIP        : {:#X}", frame.instruction_pointer.as_u64());
+    kerror!("  CS         : {:#X}", frame.code_segment);
+    kerror!("  RSP        : {:#X}", frame.stack_pointer.as_u64());
+    kerror!("  SS         : {:#X}", frame.stack_segment);
+    panic!("GPF");
 }
 
 extern "x86-interrupt" fn on_stack_segment_fault(frame: InterruptStackFrame, code: u64) {
@@ -307,24 +315,23 @@ extern "sysv64" fn syscall_handler(
 
     let result = sys::syscall::dispatch(number, a1, a2, a3, a4);
 
-    // Restore context after process exit.
-    // FIX BUG #9: Setelah dispatch(EXIT) → terminate() sudah jalan,
-    // CURRENT_PID sekarang = parent_id.
-    // Kalau parent punya saved_stack_frame (sudah pernah di-save saat SPAWN) → restore.
-    // Kalau tidak ada (parent adalah kernel/PID 0 atau belum pernah spawn) →
-    // biarkan frame apa adanya, parent akan lanjut dari titik setelah syscall ini.
     if number == sys::syscall::number::EXIT {
-        // saved_stack_frame() sekarang membaca dari parent (CURRENT_PID sudah berubah)
         if let Some(sf) = sys::process::saved_stack_frame() {
             unsafe { frame.as_mut().write(sf); }
             *regs = sys::process::saved_registers();
+        } else {
+            klog!("CHN: exit → kernel_longjmp");
+            unsafe { sys::process::kernel_longjmp(); }
         }
-        // Jika None: parent tidak punya saved frame → tidak perlu restore,
-        // iretq akan kembali ke titik parent memanggil syscall SPAWN sebelumnya.
-        // regs.rax akan di-set ke result di bawah (exit code).
     }
 
     regs.rax = result;
+}
+
+/// Stub return point — tidak dipakai lagi, diganti KERNEL_RSP mechanism
+#[no_mangle]
+pub extern "C" fn kernel_return_stub() {
+    klog!("CHN: process exited, back to shell");
 }
 
 // ---------------------------------------------------------------------------

@@ -11,7 +11,6 @@ bit_field           = "0.10.2"
 bootloader          = { version = "0.9.23", features = ["map_physical_memory"] }
 lazy_static         = { version = "1.4.0", features = ["spin_no_std"] }
 linked_list_allocator = "0.10.5"
-object              = { version = "0.32.1", default-features = false, features = ["read"] }
 pc-keyboard         = "0.7.0"
 pic8259             = "0.10.1"
 raw-cpuid           = "10.7.0"

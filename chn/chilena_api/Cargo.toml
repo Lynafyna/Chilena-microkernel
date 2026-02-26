@@ -1,0 +1,12 @@
+[package]
+name    = "chilena_api"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["rlib"]
+
+[profile.release]
+opt-level = "s"      # optimasi ukuran
+lto       = true     # link-time optimization
+panic     = "abort"  # no unwinding di userspace

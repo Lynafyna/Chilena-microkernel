@@ -101,6 +101,7 @@ fn exec_line(line: &str) -> Result<(), ExitCode> {
         // system
         "install" => cl::system::install::run(),
         "reboot"  => cl::system::reboot::run(),
+        "run"     => cl::system::run::run(args),
 
         "exit"    => return Err(ExitCode::Success),
 

@@ -1,7 +1,10 @@
 //! Process Manager for Chilena
 //!
 //! Manages the process table, I/O handles, context switching,
-//! and loading ELF binaries into userspace memory.
+//! and loading CHN binaries into userspace memory.
+//!
+//! Format binary yang didukung: CHN (Chilena Native) — format custom Chilena.
+//! ELF tidak didukung — Chilena punya format sendiri.
 
 use crate::api::process::ExitCode;
 use crate::sys;
@@ -20,7 +23,6 @@ use core::arch::asm;
 use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use lazy_static::lazy_static;
 use linked_list_allocator::LockedHeap;
-use object::{Object, ObjectSegment};
 use spin::RwLock;
 use x86_64::registers::control::Cr3;
 use x86_64::structures::idt::InterruptStackFrameValue;
@@ -34,14 +36,17 @@ use x86_64::VirtAddr;
 // Constants
 // ---------------------------------------------------------------------------
 
-const ELF_MAGIC: [u8; 4] = [0x7F, b'E', b'L', b'F'];
-const BIN_MAGIC: [u8; 4] = [0x7F, b'C', b'H', b'N']; // Chilena flat binary
+/// CHN header magic: 0x7F 'C' 'H' 'N'
+pub const CHN_MAGIC: [u8; 4] = [0x7F, b'C', b'H', b'N'];
+
+/// Ukuran CHN header dalam bytes
+pub const CHN_HEADER_SIZE: usize = 32;
 
 pub const MAX_HANDLES:  usize = 64;
 pub const MAX_PROCS:    usize = 8;
 pub const MAX_PROC_MEM: usize = 10 << 20; // 10 MB per process
 
-/// Start address of userspace (must be above kernel)
+/// Start address of userspace
 const USER_BASE: u64 = 0x0080_0000;
 
 // ---------------------------------------------------------------------------
@@ -55,6 +60,14 @@ pub static NEXT_PID:    AtomicUsize = AtomicUsize::new(1);
 /// Jumlah proses aktif (tidak termasuk PID 0 / kernel idle).
 /// Ini terpisah dari NEXT_PID yang merupakan counter monotonik.
 pub static ACTIVE_PROCS: AtomicUsize = AtomicUsize::new(0);
+
+/// Kernel RSP yang disimpan sebelum jump ke proses CHN
+/// Dipakai untuk kembali ke kernel setelah proses exit
+static KERNEL_RSP: AtomicU64 = AtomicU64::new(0);
+static KERNEL_RSP2: AtomicU64 = AtomicU64::new(0);  // kernel RSP setelah return
+
+pub fn get_kernel_rsp() -> u64  { KERNEL_RSP.load(Ordering::SeqCst) }
+pub fn get_kernel_rsp2() -> u64 { KERNEL_RSP2.load(Ordering::SeqCst) }
 
 lazy_static! {
     pub static ref PROC_TABLE: RwLock<[Box<Process>; MAX_PROCS]> = {
@@ -98,11 +111,83 @@ fn find_free_code_base() -> Option<u64> {
 }
 
 // ---------------------------------------------------------------------------
-// Register state
-// FIX: tambahkan callee-saved registers (rbx, rbp, r12-r15)
-// Sebelumnya hanya ada scratch registers — ini bisa corrupt state proses
-// yang memakai register callee-saved (hampir semua program non-trivial)
+// CHN Binary Format — Chilena Native Executable
+//
+// Header 32 bytes:
+//   [0..4]   magic        = 0x7F 'C' 'H' 'N'
+//   [4..6]   version      = 1
+//   [6..8]   flags        = 0x0001 executable | 0x0002 debug
+//   [8..12]  entry_offset = offset dari awal CODE ke entry point
+//   [12..16] code_size    = ukuran section kode (bytes)
+//   [16..20] data_size    = ukuran section data (bytes)
+//   [20..24] stack_size   = stack yang diminta (default 65536)
+//   [24..28] min_memory   = minimum RAM yang dibutuhkan
+//   [28..30] target_arch  = 0x01 = x86_64
+//   [30]     os_version   = minimum Chilena version
+//   [31]     checksum     = XOR semua 31 bytes sebelumnya
+//
+// Setelah header:
+//   [32 .. 32+code_size]            : kode program
+//   [32+code_size .. 32+code_size+data_size] : data (string, konstanta)
 // ---------------------------------------------------------------------------
+
+pub struct ChnHeader {
+    pub version:      u16,
+    pub flags:        u16,
+    pub entry_offset: u32,
+    pub code_size:    u32,
+    pub data_size:    u32,
+    pub stack_size:   u32,
+    pub min_memory:   u32,
+    pub target_arch:  u16,
+    pub os_version:   u8,
+    pub checksum:     u8,
+}
+
+impl ChnHeader {
+    /// Parse CHN header dari bytes — validasi magic + checksum
+    pub fn parse(bin: &[u8]) -> Option<Self> {
+        if bin.len() < CHN_HEADER_SIZE { return None; }
+
+        // Cek magic
+        if &bin[0..4] != &CHN_MAGIC { return None; }
+
+        // Cek checksum — XOR semua 31 bytes pertama
+        let expected_checksum = bin[..31].iter().fold(0u8, |acc, &b| acc ^ b);
+        if expected_checksum != bin[31] {
+            kwarn!("CHN: checksum mismatch (got {:#X}, expected {:#X})",
+                bin[31], expected_checksum);
+            return None;
+        }
+
+        let version      = u16::from_le_bytes(bin[4..6].try_into().ok()?);
+        let flags        = u16::from_le_bytes(bin[6..8].try_into().ok()?);
+        let entry_offset = u32::from_le_bytes(bin[8..12].try_into().ok()?);
+        let code_size    = u32::from_le_bytes(bin[12..16].try_into().ok()?);
+        let data_size    = u32::from_le_bytes(bin[16..20].try_into().ok()?);
+        let stack_size   = u32::from_le_bytes(bin[20..24].try_into().ok()?);
+        let min_memory   = u32::from_le_bytes(bin[24..28].try_into().ok()?);
+        let target_arch  = u16::from_le_bytes(bin[28..30].try_into().ok()?);
+        let os_version   = bin[30];
+        let checksum     = bin[31];
+
+        // Validasi arch — hanya x86_64 (0x01)
+        if target_arch != 0x01 {
+            kwarn!("CHN: unsupported arch {:#X}", target_arch);
+            return None;
+        }
+
+        // Validasi ukuran
+        let total_expected = CHN_HEADER_SIZE + code_size as usize + data_size as usize;
+        if bin.len() < total_expected {
+            kwarn!("CHN: binary too small ({} < {})", bin.len(), total_expected);
+            return None;
+        }
+
+        Some(Self { version, flags, entry_offset, code_size, data_size,
+                    stack_size, min_memory, target_arch, os_version, checksum })
+    }
+}
 
 #[repr(align(8), C)]
 #[derive(Debug, Clone, Copy, Default)]
@@ -352,6 +437,113 @@ pub fn power_off_hook() {
 }
 
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// KernelContext — simpan full register state untuk longjmp balik ke kernel
+// ---------------------------------------------------------------------------
+#[repr(C)]
+pub struct KernelContext {
+    pub rsp: u64,
+    pub r15: u64, pub r14: u64, pub r13: u64, pub r12: u64,
+    pub rbp: u64, pub rbx: u64,
+    pub rip: u64,
+}
+
+static mut KERNEL_CTX: KernelContext = KernelContext {
+    rsp: 0, r15: 0, r14: 0, r13: 0, r12: 0,
+    rbp: 0, rbx: 0, rip: 0,
+};
+
+#[unsafe(naked)]
+unsafe extern "sysv64" fn spawn_exec_save_rsp(
+    proc:     *const Process,
+    args_ptr: usize,
+    args_len: usize,
+) {
+    core::arch::naked_asm!(
+        // Simpan semua callee-saved + RSP + return address ke KERNEL_CTX
+        // Layout: rsp=0, r15=8, r14=16, r13=24, r12=32, rbp=40, rbx=48, rip=56
+        "mov [{ctx} + 0],  rsp",
+        "mov [{ctx} + 8],  r15",
+        "mov [{ctx} + 16], r14",
+        "mov [{ctx} + 24], r13",
+        "mov [{ctx} + 32], r12",
+        "mov [{ctx} + 40], rbp",
+        "mov [{ctx} + 48], rbx",
+        "mov rax, [rsp]",            // return address dari stack
+        "mov [{ctx} + 56], rax",
+        // Panggil exec_raw(proc, args_ptr, args_len)
+        "call {exec}",
+        ctx  = sym KERNEL_CTX,
+        exec = sym Process::exec_raw,
+    );
+}
+
+/// Dipanggil oleh IDT EXIT handler — restore kernel context dan return
+pub unsafe fn kernel_longjmp() -> ! {
+    core::arch::asm!(
+        "mov r15, [{ctx} + 8]",
+        "mov r14, [{ctx} + 16]",
+        "mov r13, [{ctx} + 24]",
+        "mov r12, [{ctx} + 32]",
+        "mov rbp, [{ctx} + 40]",
+        "mov rbx, [{ctx} + 48]",
+        "mov rcx, [{ctx} + 56]",   // return address
+        "mov rsp, [{ctx} + 0]",    // restore RSP
+        "add rsp, 8",              // pop return address (sudah di rcx)
+        "mov ax, 0x20",            // restore kernel DS
+        "mov ds, ax",
+        "mov es, ax",
+        "jmp rcx",                 // jump ke return address
+        ctx = sym KERNEL_CTX,
+        options(noreturn)
+    );
+}
+//
+// Menggunakan naked function agar kontrol stack 100% manual.
+// Argumen (System V AMD64 ABI):
+//   rdi = entry (RIP tujuan)
+//   rsi = stack_top (RSP userspace)
+//   rdx = u_code (CS selector)
+//   rcx = u_data (SS + DS/ES/FS/GS selector)
+//   r8  = args_ptr (untuk rdi userspace)
+//   r9  = args_len (untuk rsi userspace)
+// ---------------------------------------------------------------------------
+#[unsafe(naked)]
+unsafe extern "sysv64" fn jump_to_userspace(
+    entry:     u64,  // rdi
+    stack_top: u64,  // rsi
+    u_code:    u64,  // rdx
+    u_data:    u64,  // rcx
+    args_ptr:  u64,  // r8
+    args_len:  u64,  // r9
+) -> ! {
+    core::arch::naked_asm!(
+        // Set data segment registers ke u_data (rcx)
+        "mov ax, cx",
+        "mov ds, ax",
+        "mov es, ax",
+        // Build iretq frame
+        "push rcx",       // SS
+        "push rsi",       // RSP userspace
+        "push 0x202",     // RFLAGS
+        "push rdx",       // CS
+        "push rdi",       // RIP = entry
+        // Set argumen userspace
+        "mov rdi, r8",
+        "mov rsi, r9",
+        "xor rax, rax",
+        "xor rbx, rbx",
+        "xor rcx, rcx",
+        "xor rdx, rdx",
+        "xor r8,  r8",
+        "xor r9,  r9",
+        "xor r10, r10",
+        "xor r11, r11",
+        "iretq",
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Process struct
 // ---------------------------------------------------------------------------
 
@@ -394,8 +586,10 @@ impl Process {
     pub fn spawn(bin: &[u8], args_ptr: usize, args_len: usize) -> Result<(), ExitCode> {
         if let Ok(id) = Self::create(bin) {
             let proc = PROC_TABLE.read()[id].clone();
-            proc.exec(args_ptr, args_len);
-            unreachable!();
+            unsafe { spawn_exec_save_rsp(&*proc, args_ptr, args_len); }
+            // Kembali ke sini setelah kernel_longjmp dari EXIT syscall
+            // Ini berarti proses selesai dengan sukses
+            return Ok(());
         }
         Err(ExitCode::ExecError)
     }
@@ -427,23 +621,45 @@ impl Process {
         let stack_base = code_base + MAX_PROC_MEM as u64 - 4096;
         let mut entry_point = 0u64;
 
-        // Load ELF or flat binary
-        if bin.get(0..4) == Some(&ELF_MAGIC) {
-            if let Ok(obj) = object::File::parse(bin) {
-                entry_point = obj.entry();
-                for seg in obj.segments() {
-                    if let Ok(data) = seg.data() {
-                        let addr = code_base + seg.address();
-                        let size = seg.size() as usize;
-                        Self::load_segment(&mut mapper, addr, size, data)?;
-                    }
-                }
-            }
-        } else if bin.get(0..4) == Some(&BIN_MAGIC) {
-            Self::load_segment(&mut mapper, code_base, bin.len() - 4, &bin[4..])?;
-        } else {
+        // Parse dan load CHN binary
+        let hdr = ChnHeader::parse(bin).ok_or(())?;
+
+        // Validasi memory requirement
+        let stack_sz = if hdr.stack_size == 0 { 65536 } else { hdr.stack_size as usize };
+        let total_needed = hdr.code_size as usize + hdr.data_size as usize + stack_sz;
+        if total_needed > MAX_PROC_MEM {
+            kwarn!("CHN: program butuh {} bytes, max {}", total_needed, MAX_PROC_MEM);
             return Err(());
         }
+
+        // Load code section ke code_base
+        let code_start = CHN_HEADER_SIZE;
+        let code_end   = code_start + hdr.code_size as usize;
+        Self::load_segment(&mut mapper, code_base,
+            hdr.code_size as usize, &bin[code_start..code_end])?;
+
+        // Load data section setelah code (jika ada)
+        if hdr.data_size > 0 {
+            let data_start  = code_end;
+            let data_end    = data_start + hdr.data_size as usize;
+            let data_vaddr  = code_base + hdr.code_size as u64;
+            Self::load_segment(&mut mapper, data_vaddr,
+                hdr.data_size as usize, &bin[data_start..data_end])?;
+        }
+
+        // Entry point = code_base + entry_offset dari header
+        entry_point = hdr.entry_offset as u64;
+
+        klog!("CHN: loaded code={}B data={}B stack={}B entry=+{:#X}",
+            hdr.code_size, hdr.data_size, stack_sz, entry_point);
+
+        // Map stack pages — WAJIB sebelum proses jalan!
+        // stack_base adalah puncak stack (RSP awal), tumbuh ke bawah
+        // Kita map stack_sz bytes di bawah stack_base
+        let stack_start = stack_base - stack_sz as u64;
+        let empty_stack = alloc::vec![0u8; stack_sz];
+        Self::load_segment(&mut mapper, stack_start, stack_sz, &empty_stack)?;
+        klog!("CHN: stack mapped @ {:#X} - {:#X}", stack_start, stack_base);
 
         let parent = PROC_TABLE.read()[current_pid()].clone();
 
@@ -469,6 +685,10 @@ impl Process {
     }
 
     fn exec(&self, args_ptr: usize, args_len: usize) {
+        self.exec_raw(args_ptr, args_len)
+    }
+
+    fn exec_raw(&self, args_ptr: usize, args_len: usize) {
         let pt  = unsafe { page_table() };
         let mut mapper = unsafe {
             OffsetPageTable::new(pt, VirtAddr::new(phys_mem_offset()))
@@ -527,24 +747,22 @@ impl Process {
 
         set_pid(self.id);
 
+        let entry_vaddr = self.code_base + self.entry_point;
+        klog!("CHN: jumping to entry={:#X} stack={:#X} cs={:#X} ss={:#X}",
+            entry_vaddr, self.stack_base,
+            GDT.1.u_code.0, GDT.1.u_data.0);
+
         unsafe {
             let (_, flags) = Cr3::read();
             Cr3::write(self.pt_frame, flags);
 
-            asm!(
-                "cli",
-                "push {ss:r}",
-                "push {rsp:r}",
-                "push 0x200",
-                "push {cs:r}",
-                "push {rip:r}",
-                "iretq",
-                ss  = in(reg) GDT.1.u_data.0,
-                rsp = in(reg) self.stack_base,
-                cs  = in(reg) GDT.1.u_code.0,
-                rip = in(reg) self.code_base + self.entry_point,
-                in("rdi") final_args.as_ptr(),
-                in("rsi") final_args.len(),
+            jump_to_userspace(
+                entry_vaddr,
+                self.stack_base,
+                GDT.1.u_code.0 as u64,
+                GDT.1.u_data.0 as u64,
+                final_args.as_ptr() as u64,
+                final_args.len() as u64,
             );
         }
     }

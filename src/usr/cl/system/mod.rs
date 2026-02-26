@@ -2,3 +2,4 @@
 
 pub mod install;
 pub mod reboot;
+pub mod run;
