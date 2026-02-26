@@ -32,39 +32,36 @@ disk:
 	fi
 
 # Build semua program CHN
+CHN_PROGRAMS := hello counter fibonacci sysinfo
+
 build-chn:
 	@mkdir -p $(CHN_OUT)
 	@echo "=== Building CHN programs ==="
-	@cd $(CHN_DIR)/programs/hello && \
-		cargo build --release --target x86_64-unknown-none \
-			-Z build-std=core \
-			-Z build-std-features=compiler-builtins-mem 2>&1
-	@# Konversi ke flat binary pakai objcopy
-	@rust-objcopy --strip-all -O binary \
-		$(CHN_DIR)/programs/hello/target/x86_64-unknown-none/release/hello \
-		$(CHN_OUT)/hello.raw 2>/dev/null || \
-	llvm-objcopy --strip-all -O binary \
-		$(CHN_DIR)/programs/hello/target/x86_64-unknown-none/release/hello \
-		$(CHN_OUT)/hello.raw 2>/dev/null || \
-	objcopy --strip-all -O binary \
-		$(CHN_DIR)/programs/hello/target/x86_64-unknown-none/release/hello \
-		$(CHN_OUT)/hello.raw
-	@echo "Binary info:"
-	@wc -c $(CHN_OUT)/hello.raw
-	@python3 $(CHN_DIR)/tools/chn-pack.py \
-		$(CHN_OUT)/hello.raw $(CHN_OUT)/hello.chn
-	@echo "=== CHN programs built ==="
-	@ls -la $(CHN_OUT)/
+	@for prog in $(CHN_PROGRAMS); do \
+		echo "--- $$prog ---"; \
+		(cd $(CHN_DIR)/programs/$$prog && \
+			cargo build --release --target x86_64-unknown-none \
+				-Z build-std=core \
+				-Z build-std-features=compiler-builtins-mem 2>&1); \
+		OBJCOPY=$$(which rust-objcopy 2>/dev/null || which llvm-objcopy 2>/dev/null || which objcopy); \
+		$$OBJCOPY --strip-all -O binary \
+			$(CHN_DIR)/programs/$$prog/target/x86_64-unknown-none/release/$$prog \
+			$(CHN_OUT)/$$prog.raw; \
+		python3 $(CHN_DIR)/tools/chn-pack.py \
+			$(CHN_OUT)/$$prog.raw $(CHN_OUT)/$$prog.chn; \
+		echo "  OK: $(CHN_OUT)/$$prog.chn"; \
+	done
+	@echo "=== Selesai ==="
+	@ls -la $(CHN_OUT)/*.chn
 
-# Inject program CHN ke disk.img via loop mount
+# Inject semua program CHN ke disk.img
 inject-chn: build-chn disk
-	@echo "=== Injecting CHN programs ke disk ==="
-	@echo "TODO: gunakan chfs-write dari dalam Chilena untuk upload"
-	@echo "Untuk sekarang: jalankan make run-disk, lalu:"
-	@echo "  (dari shell Chilena) chfs-write hello.chn <isi dari file>"
-	@echo ""
-	@echo "File .chn tersedia di: $(CHN_OUT)/"
-	@ls -la $(CHN_OUT)/*.chn 2>/dev/null || echo "(tidak ada .chn)"
+	@echo "=== Injecting ke disk ==="
+	@for prog in $(CHN_PROGRAMS); do \
+		echo "  Injecting $$prog.chn..."; \
+		python3 $(CHN_DIR)/tools/chfs-inject.py inject $(DISK) $(CHN_OUT)/$$prog.chn; \
+	done
+	@echo "=== Inject selesai ==="
 
 # Jalankan di QEMU tanpa VirtIO disk
 run: image
