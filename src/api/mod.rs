@@ -4,7 +4,10 @@
 //! not direct access to `sys/`.
 
 pub mod console;
-pub mod process;
-pub mod syscall;
 pub mod fs;
 pub mod io;
+pub mod proc;
+pub mod syscall;
+
+// Re-export proc sebagai process untuk backward compatibility
+pub use proc as process;
