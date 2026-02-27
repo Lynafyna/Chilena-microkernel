@@ -76,12 +76,6 @@ fn exec_line(line: &str) -> Result<(), ExitCode> {
         "cd"      => cl::basic::cd::run(args),
         "info"    => cl::basic::info::run(),
 
-        // fs
-        "ls"          => cl::fs::ls::run(args),
-        "cat"         => cl::fs::cat::run(args),
-        "write"       => cl::fs::write::run(args),
-        "mkdir"       => cl::fs::mkdir::run(args),
-
         // ChilenaFS — disk-based persistent filesystem
         "chfs-format" => cl::chfs::format::run(),
         "chfs-ls"     => cl::chfs::ls::run(),
@@ -89,17 +83,15 @@ fn exec_line(line: &str) -> Result<(), ExitCode> {
         "chfs-cat"    => cl::chfs::cat::run(args),
         "chfs-rm"     => cl::chfs::rm::run(args),
 
-        // disk (raw VirtIO sector access)
+        // disk (raw VirtIO sector access — debug only)
         "disk-ping"   => cl::disk::ping::run(),
         "disk-read"   => cl::disk::read::run(args),
-        "disk-write"  => cl::disk::write::run(args),
 
         // ipc
         "send"    => cl::ipc::send::run(args),
         "recv"    => cl::ipc::recv::run(),
 
         // system
-        "install" => cl::system::install::run(),
         "reboot"  => cl::system::reboot::run(),
         "run"     => cl::system::run::run(args),
 

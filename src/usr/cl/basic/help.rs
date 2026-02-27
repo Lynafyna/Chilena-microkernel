@@ -2,10 +2,10 @@
 
 pub fn run() {
     println!("Available commands:");
-    println!("  help           — show this message");
-    println!("  echo [text]    — print text");
-    println!("  cd [path]      — change directory");
-    println!("  info           — system information");
+    println!("  help           — tampilkan pesan ini");
+    println!("  echo [text]    — print teks");
+    println!("  cd [path]      — pindah direktori");
+    println!("  info           — informasi sistem");
     println!("");
     println!("  [ChilenaFS — persistent disk filesystem]");
     println!("  chfs-format    — format disk (HAPUS SEMUA DATA!)");
@@ -14,21 +14,16 @@ pub fn run() {
     println!("  chfs-cat <f>   — baca file dari disk");
     println!("  chfs-rm <f>    — hapus file dari disk");
     println!("");
-    println!("  [MemFS — RAM filesystem]");
-    println!("  ls [path]      — list files");
-    println!("  cat [file]     — show file contents");
-    println!("  write [f] [t]  — write text to file");
-    println!("  mkdir [path]   — create directory");
-    println!("");
-    println!("  [Disk raw access]");
+    println!("  [Disk — debug]");
     println!("  disk-ping      — cek status VirtIO disk");
     println!("  disk-read <n>  — baca sektor N dari disk");
-    println!("  disk-write <n> <text> — tulis ke sektor N");
     println!("");
-    println!("  [Lainnya]");
-    println!("  install        — setup filesystem");
-    println!("  send <pid> <m> — send IPC message");
-    println!("  recv           — receive IPC message");
-    println!("  reboot         — restart the system");
-    println!("  exit           — exit the shell");
+    println!("  [IPC]");
+    println!("  send <pid> <m> — kirim pesan IPC");
+    println!("  recv           — terima pesan IPC");
+    println!("");
+    println!("  [System]");
+    println!("  run <prog.chn> — jalankan program CHN");
+    println!("  reboot         — restart sistem");
+    println!("  exit           — keluar shell");
 }

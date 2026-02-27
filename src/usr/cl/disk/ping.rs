@@ -17,5 +17,4 @@ pub fn run() {
     println!("Perintah disk yang tersedia:");
     println!("  disk-ping              -- info disk ini");
     println!("  disk-read <sector>     -- baca 512 bytes dari sektor");
-    println!("  disk-write <sector> <text> -- tulis text ke sektor");
 }
